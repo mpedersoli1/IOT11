@@ -1,0 +1,9 @@
+{
+    "makefile.launchConfigurations": [
+        {
+            "cwd": "/home/m/FreeRTOSv202112.00/IOT011/Demo_6/build",
+            "binaryPath": "/home/m/FreeRTOSv202112.00/IOT011/Demo_6/build/demo_6",
+            "binaryArgs": []
+        }
+    ]
+}
