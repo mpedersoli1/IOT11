@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <pthread.h>
+#include <stdlib.h>
 
 /* Kernel includes. */
 #include "FreeRTOS.h"
@@ -43,31 +44,53 @@ st_led_param_t red = {
 
 TaskHandle_t greenTask_hdlr, redTask_hdlr;
 QueueHandle_t structQueue = NULL;
-int freeze = 0;
+volatile int freeze = 0;
+volatile int red_enabled = 0;
 
 #include <termios.h>
+
+static struct termios g_initial_settings;
+static int g_terminal_ready = 0;
+
+static void cleanup_terminal(void)
+{
+    if (g_terminal_ready)
+    {
+        tcsetattr(0, TCSANOW, &g_initial_settings);
+    }
+    ENABLE_CURSOR();
+}
 
 
 static void prvTask_getChar(void *pvParameters)
 {
     char key;
-    int n;
 
     /* I need to change  the keyboard behavior to
     enable nonblock getchar */
-    struct termios initial_settings,
-        new_settings;
+    struct termios new_settings;
 
-    tcgetattr(0, &initial_settings);
+    if (tcgetattr(0, &g_initial_settings) != 0)
+    {
+        perror("tcgetattr failed");
+        cleanup_terminal();
+        exit(1);
+    }
 
-    new_settings = initial_settings;
+    new_settings = g_initial_settings;
     new_settings.c_lflag &= ~ICANON;
     new_settings.c_lflag &= ~ECHO;
     new_settings.c_lflag &= ~ISIG;
     new_settings.c_cc[VMIN] = 0;
     new_settings.c_cc[VTIME] = 1;
 
-    tcsetattr(0, TCSANOW, &new_settings);
+    if (tcsetattr(0, TCSANOW, &new_settings) != 0)
+    {
+        perror("tcsetattr failed");
+        cleanup_terminal();
+        exit(1);
+    }
+    g_terminal_ready = 1;
     /* End of keyboard configuration */
     for (;;)
     {
@@ -75,7 +98,7 @@ static void prvTask_getChar(void *pvParameters)
         key = getchar();
         if( key=='1' ||key=='2' ||key=='3' ||key=='4' ||key=='5' ||key=='6' ||key=='7' ||key=='8' ||key=='9' ||key=='0')
         {
-            vTaskResume(redTask_hdlr);
+            red_enabled = 1;
             key =0;
         }
         if (key > 0)
@@ -87,17 +110,15 @@ static void prvTask_getChar(void *pvParameters)
                 break;
             case '*' :
                 freeze=1;
-                vTaskResume(redTask_hdlr);
+                red_enabled = 1;
                 break;
             case '+':
                 freeze = 0;
-                vTaskResume(redTask_hdlr);
-                vTaskResume(greenTask_hdlr);
                 break;
             default:
                 if (xQueueSend(structQueue, &key, 0) != pdTRUE)
                 {
-                    vTaskResume(redTask_hdlr);
+                    /* Drop if queue is full. */
                 }
             }
         }
@@ -111,8 +132,7 @@ static void prvTask_getChar(void *pvParameters)
         }*/
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-    tcsetattr(0, TCSANOW, &initial_settings);
-    ENABLE_CURSOR();
+    cleanup_terminal();
     exit(0);
     vTaskDelete(NULL);
 }
@@ -121,44 +141,25 @@ static void prvTask_led(void *pvParameters)
 {
     // pvParameters contains LED params
     st_led_param_t *led = (st_led_param_t *)pvParameters;
-    portTickType xLastWakeTime = xTaskGetTickCount();
-
-    vTaskSuspend(redTask_hdlr);
-    
-    
     for (;;)
     {
-        if(pvParameters==&red && freeze==1)
-        {   
-            vTaskResume(redTask_hdlr);
+        if ((pvParameters == &red && red_enabled == 0) ||
+            (pvParameters == &green && freeze == 1))
+        {
+            vTaskDelay(25 / portTICK_PERIOD_MS);
+            continue;
         }
-        
-        // console_print("@");
+
         gotoxy(led->pos, 2);
         printf("%s⬤", led->color);
         fflush(stdout);
         vTaskDelay(led->period_ms  / portTICK_PERIOD_MS);
-        // vTaskDelayUntil(&xLastWakeTime, led->period_ms / portTICK_PERIOD_MS);
-        if(pvParameters==&red && freeze==1)
-        {   
-            vTaskSuspend(redTask_hdlr);
-        }
-        
 
         gotoxy(led->pos, 2);
         printf("%s ", BLACK);
         fflush(stdout);
         vTaskDelay(led->period_ms  / portTICK_PERIOD_MS);
-        // vTaskDelayUntil(&xLastWakeTime, led->period_ms / portTICK_PERIOD_MS);
-        if(pvParameters==&red)
-        {   
-            vTaskSuspend(redTask_hdlr);
-        }
-        if(pvParameters==&green && freeze==1)
-        {   
-            vTaskSuspend(greenTask_hdlr);
-        }
-        
+
     }
 
     vTaskDelete(NULL);
@@ -180,7 +181,6 @@ static void prvTask_logger(void *pvParameters)
             printf("%c", key);
             fflush(stdout);
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     vTaskDelete(NULL);
 }
@@ -198,16 +198,22 @@ void app_run(void)
 
     clear();
     DISABLE_CURSOR();
+    atexit(cleanup_terminal);
     printf(
         "╔═════════════════╗\n"
         "║                 ║\n"
         "╚═════════════════╝\n");
         //"aaaaaaaaaaaaa");
 
-    xTaskCreate(prvTask_logger, "logger", configMINIMAL_STACK_SIZE, NULL, TASK4_PRIORITY, NULL);
-    xTaskCreate(prvTask_led, "LED_green", configMINIMAL_STACK_SIZE, &green, TASK1_PRIORITY, &greenTask_hdlr);
-    xTaskCreate(prvTask_led, "LED_red", configMINIMAL_STACK_SIZE, &red, TASK2_PRIORITY, &redTask_hdlr);
-    xTaskCreate(prvTask_getChar, "Get_key", configMINIMAL_STACK_SIZE, NULL, TASK3_PRIORITY, NULL);
+    if (xTaskCreate(prvTask_logger, "logger", configMINIMAL_STACK_SIZE, NULL, TASK4_PRIORITY, NULL) != pdPASS ||
+        xTaskCreate(prvTask_led, "LED_green", configMINIMAL_STACK_SIZE, &green, TASK1_PRIORITY, &greenTask_hdlr) != pdPASS ||
+        xTaskCreate(prvTask_led, "LED_red", configMINIMAL_STACK_SIZE, &red, TASK2_PRIORITY, &redTask_hdlr) != pdPASS ||
+        xTaskCreate(prvTask_getChar, "Get_key", configMINIMAL_STACK_SIZE, NULL, TASK3_PRIORITY, NULL) != pdPASS)
+    {
+        printf("Fail on create task\n");
+        cleanup_terminal();
+        exit(1);
+    }
 
     /* Start the tasks and timer running. */
     vTaskStartScheduler();

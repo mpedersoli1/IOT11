@@ -216,9 +216,9 @@ void traceOnEnter()
                 prvSaveTraceFile();
             }
 
-            /* clear the buffer */
-            char buffer[ 0 ];
-            read( STDIN_FILENO, &buffer, 1 );
+            /* clear one pending byte from stdin */
+            char c;
+            ( void ) read( STDIN_FILENO, &c, 1 );
         }
     #endif /* if ( TRACE_ON_ENTER == 1 ) */
 }
@@ -374,4 +374,3 @@ void handle_sigint( int signal )
 
     exit( 2 );
 }
-
