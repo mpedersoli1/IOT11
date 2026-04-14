@@ -64,7 +64,7 @@ static void cleanup_terminal(void)
 
 static void prvTask_getChar(void *pvParameters)
 {
-    char key;
+    int key;
 
     /* I need to change  the keyboard behavior to
     enable nonblock getchar */
@@ -96,6 +96,13 @@ static void prvTask_getChar(void *pvParameters)
     {
         int stop = 0;
         key = getchar();
+
+        if (key == EOF)
+        {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         if( key=='1' ||key=='2' ||key=='3' ||key=='4' ||key=='5' ||key=='6' ||key=='7' ||key=='8' ||key=='9' ||key=='0')
         {
             red_enabled = 1;
@@ -116,10 +123,14 @@ static void prvTask_getChar(void *pvParameters)
                 freeze = 0;
                 break;
             default:
-                if (xQueueSend(structQueue, &key, 0) != pdTRUE)
+            {
+                char key_to_log = (char)key;
+                if (xQueueSend(structQueue, &key_to_log, 0) != pdTRUE)
                 {
                     /* Drop if queue is full. */
                 }
+                break;
+            }
             }
         }
         if (stop)
